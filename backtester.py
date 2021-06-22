@@ -311,17 +311,18 @@ if __name__=="__main__":
     data=pd.read_csv("Bitcoin Historical Data.csv")
     data['DateTime64']=pd.to_datetime(data['Date'])
 
-    start=np.datetime64("2013-01-01")+random.randint(0,365*6)
+    start=np.datetime64("2014-01-01")#+random.randint(0,365*6)
     end=start+(365*2)
 
     models = {
         "HODL":HODL,
-        "DCA":DCA,
-        "TSMOM_30_7":TSMOM_gen(30,7),
-        "TSMOM_90_7":TSMOM_gen(90,7),
-        "TSMOM_7_7":TSMOM_gen(7,7),
-        "TSMOM_7_1":TSMOM_gen(7,1),
-        "TSMOM_D":TSMOM_diversify([(7,1),(30,1),(90,1)])
+        #"DCA":DCA,
+        "TSMOM (7d/1d)":TSMOM_gen(7,1),
+        "TSMOM (30d/1d)":TSMOM_gen(30,1),
+        "TSMOM (90d/1d)":TSMOM_gen(90,1),
+        #"TSMOM (7d/7d)":TSMOM_gen(7,7),
+        "TSMOM (diversified/1d)":TSMOM_diversify([(7,1),(30,1),(90,1)])
+        #"TSMOM (diversified/7d)":TSMOM_diversify([(7,7),(30,7),(90,7)])
     }
 
     portfolios={modelName : Portfolio({'USD':1,'BTC':0}) for modelName in list(models.keys())}
@@ -337,11 +338,11 @@ if __name__=="__main__":
     #TODO: NORMALIZE RETURNS
     result=backtest(data,start,end,models,portfolios)
 
-    result['Market']=Market['Total Value']
-    ax=result.plot(figsize=(15,10),title="Backtest from %s to %s"%(start,end),ylabel="Return")
+    #result['Market']=Market['Total Value']
+    ax=result.plot(figsize=(15,10),title="Backtest from %s to %s"%(start,end),ylabel="Return",grid=True)
     ax.figure.savefig('backtestReturn.png')
 
-    result['Market']=result['Market']-result['HODL Value']
+    #result['Market']=result['Market']-result['HODL Value']
     for modelName in list(models.keys()):
         if modelName!="HODL":
             result[modelName+' Value']=result[modelName+' Value']-result['HODL Value']
