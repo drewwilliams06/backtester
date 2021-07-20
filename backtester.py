@@ -101,7 +101,7 @@ class Portfolio:
       portfolioValues (dict{asset:value})
       totalValue (float) - total value of portfolio
     ''' 
-    def getPercentages(portfolioValues,totalValue):
+    def getPercentages(self,portfolioValues,totalValue):
         return {asset:portfolioValues[asset]/totalValue for asset in self.assets}
         
         
@@ -124,7 +124,7 @@ models is a dict{name(str):model(fn)}
 portfolios is a dict{name(str):portfolio(Portfolio)}
 '''
 def backtest(backData,start,end,models,portfolios):
-    
+    fee=.999
     #get number of days from start to end
     days=(end-start)/np.timedelta64(1, 'D')
     
@@ -136,17 +136,17 @@ def backtest(backData,start,end,models,portfolios):
     #track history of portfolio holdings and total value
     
     initialValues={}
-    portfolioHistory=pd.DataFrame(columns=(['Day']+[(modelName + " Portfolio") for modelName in list(models.keys())]+[(modelName + " Value") for modelName in list(models.keys())]))
+    portfolioHistory=pd.DataFrame(columns=(['Day']+[(modelName + " Portfolio") for modelName in list(models.keys())]+[(modelName + " Value") for modelName in list(models.keys())]+[(modelName + " % Return") for modelName in list(models.keys())]))
     for modelName in list(models.keys()):
         portfolio=portfolios[modelName]
         initialValues[modelName]=sum(portfolio.getValues('USD',exchangeToTarget)[0].values())
-        
+    prevValues=initialValues.copy()
 
     
     #step one day
     for i in range(int(days)):
         
-        #Get prices for all assets - currently this is specific to bitcoin and should be generalized. also ugly one liner
+        #Get opening prices on day start+i for all assets - currently this is specific to bitcoin and should be generalized. also ugly one liner
         priceBTC=float(np.array(backData.loc[backData['DateTime64']==start+i])[0][2].replace(',',''))
         #Use these prices to generate exchange rates to USD
         exchangeToTarget={'USD':1,'BTC':priceBTC}
@@ -158,6 +158,8 @@ def backtest(backData,start,end,models,portfolios):
             totalValue=sum(portfolioValues.values())
             newRow[modelName+ " Portfolio"]=portfolios[modelName].getAllAssets()
             newRow[modelName+ " Value"]=totalValue
+            newRow[modelName+ " % Return"]=totalValue/prevValues[modelName]
+            prevValues[modelName]=totalValue
         newRow['Day']=start+i
         
             
@@ -181,11 +183,29 @@ def backtest(backData,start,end,models,portfolios):
             orders=model(limitedData,portfolio,exchangeToTarget,initialValues[modelName],start,end,i)
 
             #Fill orders (currently assuming all orders can be filled at same price as open. Bad assumption)
-            for order in orders:
+            if len(orders)>=1:
+                total=0
+                for order in orders:
+                    orderType=order[0]
+                    orderAsset=order[1]
+                    orderAmt=order[2]
+                    if orderType=="B":
+                        total+=orderAmt 
+                    if orderType=="S":
+                        total-=orderAmt 
+                if total>=0:
+                    orderType='B'
+                    orderAmt=total 
+                else:
+                    orderType='S'
+                    orderAmt=-total
+                '''            
+                for order in orders:
 
-                orderType=order[0]
-                orderAsset=order[1]
-                orderAmt=order[2]
+                    orderType=order[0]
+                    orderAsset=order[1]
+                    orderAmt=order[2]
+                '''
                 balanceUSD=portfolio.getAsset('USD')
                 balanceAsset=portfolio.getAsset(orderAsset)
 
@@ -193,7 +213,7 @@ def backtest(backData,start,end,models,portfolios):
                     orderPrice=orderAmt*exchangeToTarget[orderAsset]
                     if balanceUSD>=orderPrice:
                         portfolio.withdraw('USD',orderPrice)
-                        portfolio.deposit(orderAsset,orderAmt)
+                        portfolio.deposit(orderAsset,fee*orderAmt)
                     else:
                         if round(orderPrice-balanceUSD,8)==0: 
                             #Rounding error, no big deal
@@ -203,13 +223,13 @@ def backtest(backData,start,end,models,portfolios):
                             print("WARNING: Can't afford to buy %s %s for %s USD (USD balance %s)" %(orderAmt,orderAsset,orderPrice,balanceUSD))
                             print('Withdrawing %s USD to buy %s %s' %(balanceUSD,balanceUSD/exchangeToTarget[orderAsset],orderAsset))
                         portfolio.withdraw('USD',balanceUSD)
-                        portfolio.deposit(orderAsset,balanceUSD/exchangeToTarget[orderAsset])
+                        portfolio.deposit(orderAsset,fee*balanceUSD/exchangeToTarget[orderAsset])
 
                 elif orderType=='S':
                     orderPrice=orderAmt*exchangeToTarget[orderAsset]
                     if balanceAsset>=orderAmt:
                         portfolio.withdraw(orderAsset,orderAmt)
-                        portfolio.deposit('USD',orderPrice)
+                        portfolio.deposit('USD',fee*orderPrice)
                     else:
                         if round(orderAmt-balanceAsset,8)==0: 
                             #print("Seems to be rounding")
@@ -218,7 +238,7 @@ def backtest(backData,start,end,models,portfolios):
                             print('WARNING: Can\'t afford to sell %s %s for %s USD (%s balance %s)' %(orderAmt,orderAsset,orderPrice,orderAsset,balanceAsset))
                             print('Withdrawing %s %s for %s USD' %(balanceAsset,orderAsset,balanceAsset*exchangeToTarget[orderAsset]))
                         portfolio.withdraw(orderAsset,balanceAsset)
-                        portfolio.deposit('USD',balanceAsset*exchangeToTarget[orderAsset])
+                        portfolio.deposit('USD',fee*balanceAsset*exchangeToTarget[orderAsset])
 
                 else:
                     print("Invalid order type.")
@@ -305,24 +325,32 @@ def TSMOM_diversify(params):
         TSMOM_list+=[TSMOM_gen(lookback,rebalance)]
     return lambda limitedData,portfolio,exchangeToTarget,initialValue,start,end,i : [item for sublist in (model(limitedData,Portfolio({asset:(portfolio.getAllAssets()[asset]/n) for asset in list(portfolio.getAllAssets().keys())}),exchangeToTarget,initialValue,start,end,i) for model in TSMOM_list) for item in sublist]
 
+'''
+results is a pd dataframe of daily portfolio values indexed by date. each column represents a different portfolio
+returns: ratio of winning days to losing days - largest # consecutive wins - largest # consecutive losses - average win size - average loss size - max draw-down - longest draw-down
+'''
+def get_metrics(results):
+    pass
+
+
 
 if __name__=="__main__":
     #Get data
     data=pd.read_csv("Bitcoin Historical Data.csv")
     data['DateTime64']=pd.to_datetime(data['Date'])
 
-    start=np.datetime64("2014-01-01")#+random.randint(0,365*6)
+    start=np.datetime64("2013-01-01")+random.randint(0,365*6)
     end=start+(365*2)
-
+    print(start,end)
     models = {
         "HODL":HODL,
-        #"DCA":DCA,
+        "DCA":DCA,
         "TSMOM (7d/1d)":TSMOM_gen(7,1),
         "TSMOM (30d/1d)":TSMOM_gen(30,1),
         "TSMOM (90d/1d)":TSMOM_gen(90,1),
-        #"TSMOM (7d/7d)":TSMOM_gen(7,7),
-        "TSMOM (diversified/1d)":TSMOM_diversify([(7,1),(30,1),(90,1)])
-        #"TSMOM (diversified/7d)":TSMOM_diversify([(7,7),(30,7),(90,7)])
+        "TSMOM (7d/7d)":TSMOM_gen(7,7),
+        "TSMOM (diversified/1d)":TSMOM_diversify([(7,1),(30,1),(90,1)]),
+        "TSMOM (diversified/7d)":TSMOM_diversify([(7,7),(30,7),(90,7)])
     }
 
     portfolios={modelName : Portfolio({'USD':1,'BTC':0}) for modelName in list(models.keys())}
@@ -337,16 +365,58 @@ if __name__=="__main__":
 
     #TODO: NORMALIZE RETURNS
     result=backtest(data,start,end,models,portfolios)
-
-    #result['Market']=Market['Total Value']
-    ax=result.plot(figsize=(15,10),title="Backtest from %s to %s"%(start,end),ylabel="Return",grid=True)
-    ax.figure.savefig('backtestReturn.png')
-
-    #result['Market']=result['Market']-result['HODL Value']
+    
+    returnCumulative=result.drop([modelName+ ' % Return' for modelName in models],axis=1)
     for modelName in list(models.keys()):
         if modelName!="HODL":
-            result[modelName+' Value']=result[modelName+' Value']-result['HODL Value']
-    result['HODL Value']=result['HODL Value']-result['HODL Value']
-    ax=result.plot(figsize=(15,10),title="Backtest from %s to %s relative to HODL"%(start,end),grid=True,ylabel="Excess Return")
+            returnCumulative[modelName+' Excess Value']=returnCumulative[modelName+' Value']-returnCumulative['HODL Value']
+    returnCumulative['HODL Excess Value']=returnCumulative['HODL Value']-returnCumulative['HODL Value']
+    ax=returnCumulative.drop([modelName+ ' Excess Value' for modelName in models],axis=1).plot(figsize=(15,10),title="Backtest from %s to %s"%(start,end),ylabel="Compounded Return",grid=True)
+    ax.figure.savefig('backtestReturn.png')
+    ax=returnCumulative.drop([modelName+ ' Value' for modelName in models],axis=1).plot(figsize=(15,10),title="Backtest from %s to %s"%(start,end),ylabel="Excess Compounded Return",grid=True)
     ax.figure.savefig('backtestExcessReturn.png')
+    
+    returnPercent=result.drop([modelName+ ' Value' for modelName in models],axis=1)
+    for modelName in list(models.keys()):
+        returnPercent[modelName+' % Return']=returnPercent[modelName+' % Return']-1
+    for modelName in list(models.keys()):
+        if modelName!="HODL":
+            returnPercent[modelName+' % \Excess Return']=returnPercent[modelName+' % Return']-returnPercent['HODL % Return']
+    returnPercent['HODL % \Excess Return']=returnPercent['HODL % Return']-returnPercent['HODL % Return']
+    ax=returnPercent.drop([modelName+ ' % \Excess Return' for modelName in models],axis=1).plot(figsize=(15,10),title="Backtest from %s to %s relative to HODL"%(start,end),grid=True,ylabel="Daily Return")
+    ax.figure.savefig('backtestDailyReturn.png')
+    ax=returnPercent.drop([modelName+ ' % Return' for modelName in models],axis=1).plot(figsize=(15,10),title="Backtest from %s to %s relative to HODL"%(start,end),grid=True,ylabel="Excess Daily Return")
+    ax.figure.savefig('backtestDailyExcessReturn.png')
 
+    print('AVG Daily Return')
+    for modelName in models:
+        print(modelName+": %s"%(returnPercent[modelName+' % Return'].mean()))
+    print('AVG Excess Daily Return')
+    for modelName in models:
+        print(modelName+": %s"%(returnPercent[modelName+' % \Excess Return'].mean()))
+    print('std')
+    for modelName in models:
+        print(modelName+": %s"%(returnPercent[modelName+' % Return'].std()))
+    print('sharpe')
+    for modelName in models:
+        print(modelName+": %s"%(returnPercent[modelName+' % Return'].mean()/(returnPercent[modelName+' % Return'].std())))
+
+    #ax=pd.Series(list(np.array(returnPercent['HODL % Return']))).plot.kde()
+    #ax.figure.savefig('test.png')
+    #ax=pd.Series(list(np.array(returnPercent['TSMOM (diversified/1d) % Return']))).plot.kde()
+    #ax.figure.savefig('test2.png')
+    ax=returnPercent[[modelName+' % Return' for modelName in models]].plot(kind="kde")
+    ax.figure.savefig('test3.png')
+
+    '''
+    compare strategy A:
+    gains 1% 100 times = (1+.01)^100 for compounded value of 2.7048
+    (.01*100)/100= +1% per day on average
+
+    vs strategy B:
+    gains 1000% once, then bleeds -2% 99 times for compounded value of 1.35326
+    (9-.02*98)/100= +7.04% per day on average
+
+    B gains more on average, but A has a better outcome (and is obviously the better strategy)
+    how do we quantify this?
+    '''
